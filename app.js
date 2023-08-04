@@ -1,93 +1,174 @@
 const Koa = require('koa');
 const Router = require('koa-router');
 const bodyParser = require('koa-bodyparser')
-const mysql = require('mysql')
+const mysql = require('mysql2')
+const util = require('node:util');
 const app = new Koa();
 const router = new Router();
 const authenticateToken = require('./src/authenticate')
-// 我还没建表呢,别急
-const db = mysql.createPool({
-  host: '127.0.0.1',
+const pool = mysql.createPool({
+  host: 'localhost',
   user: 'root',
-  password: '',
+  password: '123456789qw',
   database: 'apicat',
   port: '3306'
 });
-
+//const queryPromise = pool.promise();
+const queryPromise = util.promisify(pool.query).bind(pool);
 app.use(bodyParser());  // 解析请求体
 // 身份验证中间件
 app.use(authenticateToken);
 
-// 存储接口信息的对象
-const apiBasicData = {};
 // 处理创建接口请求
 router.post('/api/projects/:projectId/apis', async ctx => {
-  const currentTime = new Date();
-  const formattedTime = currentTime.toISOString().slice(0, 19).replace('T', ' ');
-
+  // 这里不用手动获取时间,可以让数据库自动生成
   const { projectId } = ctx.params;
   // 请注意,现在还没有做后面的功能,所以后面两个参数暂时还没用上!
-  const { apiName, apiPath, httpMethod, requestParams, responseParams } = ctx.request.body;
+  const { apiName, apiPath, httpMethod, requestParams, responseParams, paramType, paramName, paramLocation, createdBy, createDescription } = ctx.request.body;
   // 项目id 跟接口id不是一个概念,看好一点.这个项目id你需要把项目数据插入数据库之后让他给你返回一个,然后你再返回给前端奥.
-  apiBasicData.ProjectID = projectId
-  apiBasicData.ApiName = apiName
-  apiBasicData.Endpoint = apiPath
-  apiBasicData.RequestMethod = httpMethod
-  apiBasicData.CreatedAt = formattedTime
+  // 存储接口信息的对象
+  const apiBasicData = {
+    ProjectID: projectId,
+    ApiName: apiName,
+    Endpoint: apiPath,
+    RequestMethod: httpMethod,
 
-  db.query('insert into APIs values ? ', apiData, (err, results) => {
-    if (err) {
-      console.log(err);
-    }
-    else {
-      // results.insertId是mysql给我们返回的id(注意 数据库需要给这个字段开自增) 用模板字符串,只是为了防止报错(懒得调试)
-      ctx.body = {
-        "message": "API created successfully",
-        "apiId": `${results.insertId}`
+  };
+  const apiParamsData = {
+    ApiId: null,
+    ParamName: paramName,
+    ParamType: paramType,
+    ParamLocation: paramLocation,
+    UpdatedAt: null,
+    // CreatedAt: 'CURRENT_TIMESTAMP', 这句话!?
+  }
+  const apiResponseData = {
+    ApiId: null,
+    ResponseBody: responseParams,
+  }
+  const apiLogData = {
+    ApiId: null,
+    ChangeDescription: createDescription,
+    ChangedBy: createdBy
+  }
+  const apiVersionData = {
+    ApiId: null,
+    VersionNumber: '0.1.0',
+    CreatedBy: createdBy,
+  }
+  const createFn = async (id) => {
+    ctx.body =
+    {
+      "success": true,
+      "code": 200,
+      "message": "API created successfully",
+      "status": null,
+      "data": {
+        "apiId": id,
+        "responseType": typeof responseParams === 'object' ? 'json' : typeof responseParams, //responseType | string | 返回数据类型,取值,或许是:JSON XML HTML 文本格式 二进制格式(gpt说的)
+        "responseBody": responseParams //responseBody | any    | 取决于返回数据类型
       }
     }
-  })
+  }
+  try {
+    queryPromise('insert into APIs set ?', apiBasicData).then((result) => {
+      const id = result.insertId;
 
+      // 更新相关数据中的 ApiId 字段
+      apiParamsData.ApiId = id;
+      apiResponseData.ApiId = id;
+      apiLogData.ApiId = id;
+      apiVersionData.ApiId = id;
+    })
+
+
+    await Promise.all([
+      queryPromise('insert into RequestParams set ?', apiParamsData),
+      queryPromise('insert into APIResponses set ?', apiResponseData),
+      queryPromise('insert into APIChangeLog set ?', apiLogData),
+      queryPromise('insert into APIVersions set ?', apiVersionData)
+    ]);
+
+    await createFn(apiLogData.ApiId);
+  } catch (error) {
+    console.log(error);
+    ctx.body = {
+      "success": false,
+      "code": 401,
+      "message": "database Error",
+      "status": null,
+      "data": null
+    }
+  }
 
 });
+// 查询接口(已测试完成)
 router.get('/api/projects/:projectId/apis', async ctx => {
-  db.query('select ApiID,ApiName,Endpoint,RequestMethod from APIS where ProjectID = ? ', ctx.params.projectId, (err, results) => {
-    if (err) {
-      console.log(err);
-    }
-    else {
-      ctx.body = {
-        "apis": results
+  const replyFn = async (result) => {
+
+    ctx.body = {
+      "success": true,
+      "code": 200,
+      "message": "API update successfully",
+      "status": null,
+      "data": {
+        "apis": result[0]
       }
     }
-  })
+
+  }
+  const result = await queryPromise('select ApiID,ApiName,Endpoint,RequestMethod from APIs where ProjectID = ? ', ctx.params.projectId)
+  await replyFn(result)
 })
 
 router.put('/api/projects/:projectId/apis/:apiId', async ctx => {
-  const { projectId, apiId } = ctx.params;
-  const { apiName, apiPath, httpMethod, requestParams, responseParams } = ctx.request.body;
-  // 这里要修改多个表的 很显然,不只是一个表!
-  db.query('update xxx', (err, results) => {
-    if (err) {
-      console.log(err);
+  const { apiId } = ctx.params;
+  const { apiName, apiPath, httpMethod, requestParams, responseParams, changedBy, changeDescription, versionNumber } = ctx.request.body;
+  const ChangeFn = async () => {
+    ctx.body =
+    {
+      "success": true,
+      "code": 200,
+      "message": "API update successfully",
+      "status": null,
+      "data": null
     }
-    else {
-      ctx.body = 'API updated successfully'
+  }
+  try {
+    await Promise.all([
+      queryPromise('update APIs set ApiName = ?,EndPoint = ?,RequestMethod = ? where ApiId = ?', [apiName, apiPath, httpMethod, apiId]),
+      queryPromise('update APIResponses set ResponseBody = ? where ApiId = ?', [responseParams, apiId]),
+      queryPromise('insert into APIChangeLog (ApiId,ChangeDescription, ChangedBy) VALUES (?, ?, ?)', [apiId, changeDescription, changedBy]),
+      queryPromise('insert into APIVersions (ApiId,VersionNumber, CreatedBy) VALUES (?, ?, ?)', [apiId, versionNumber, changedBy])
+    ]);
+    await ChangeFn()
+  } catch (error) {
+    ctx.body = {
+      "success": false,
+      "code": 401,
+      "message": "database Error",
+      "status": null,
+      "data": null
     }
-  })
+    console.log(error);
+  }
+
 })
 
 router.delete('/api/projects/:projectId/apis/:apiId', async ctx => {
-  const { projectId, apiId } = ctx.params;
-  // 很显然 删也要删多个表的,一个表肯定不够.这里还需要修改
-  db.query('delete from APIs where apiId = ?', apiId, (err, results) => {
-    if (err) {
-      console.log(err);
+  const { apiId } = ctx.params;
+  // 这里并不需要传入projectid 为什么呢,因为开启了级联删除,而且apiid是唯一的
+  const deleteFn = async () => {
+    ctx.body = {
+      "success": true,
+      "code": 200,
+      "message": "API delete successfully",
+      "status": null,
+      "data": null
     }
-    else {
-      ctx.body = 'API delete successfully'
-    }
-  })
+  }
+  await queryPromise('delete from APIs where apiId = ? ', [apiId])
+  await deleteFn()
 })
 app.use(router.routes());  // 路由处理
 app.use(router.allowedMethods());  // 允许使用HTTP方法

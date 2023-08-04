@@ -10,8 +10,15 @@ const authenticateToken = async (ctx, next) => {
     const val = await client.get(token)
     if (!val) {
       ctx.status = 401; // 未授权
-      ctx.body = {
-        "error": "Unauthorized"
+      ctx.body =
+      {
+        "success": true,
+        "code": 401,
+        "message": "失败",
+        "status": null,
+        "data": {
+          "error": "Unauthorized"
+        }
       }
     }
     else {
@@ -21,8 +28,15 @@ const authenticateToken = async (ctx, next) => {
   } else {
     ctx.status = 401; // 未授权
     ctx.body = {
-      "error": "Authentication token required"
+      "success": true,
+      "code": 401,
+      "message": "失败",
+      "status": null,
+      "data": {
+        "error": "Authentication token required"
+      }
     }
+
   }
 
 }
