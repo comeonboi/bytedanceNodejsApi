@@ -1,8 +1,10 @@
 import Koa from 'koa';
 import bodyParser from 'koa-bodyparser';
+import cors from 'koa2-cors'
 import authenticateToken from './src/authenticate/index.js';
 import router from './src/persist/index.js'
 const app = new Koa();
+app.use(cors()); // 允许跨域
 
 app.use(bodyParser());  // 解析请求体
 app.use(authenticateToken); // 身份验证中间件
